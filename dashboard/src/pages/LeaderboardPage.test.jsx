@@ -538,3 +538,96 @@ describe("LeaderboardPage window-session cache reuse", () => {
     expect(screen.getByTestId("leaderboard-skeleton")).toBeInTheDocument();
   });
 });
+
+describe("LeaderboardPage participant search", () => {
+  const searchEntries = Array.from({ length: 25 }, (_, i) => ({
+    rank: i + 1,
+    user_id: `user-${i + 1}`,
+    display_name: i === 24 ? "Bob Builder" : `Coder ${i + 1}`,
+    total_tokens: String(1000 - i * 10),
+    estimated_cost_usd: 1,
+  }));
+
+  function mockPaginatedLeaderboard() {
+    getLeaderboard.mockImplementation(({ limit = 20, offset = 0 } = {}) =>
+      Promise.resolve({
+        entries: searchEntries.slice(offset, offset + limit),
+        me: null,
+        page: Math.floor(offset / limit) + 1,
+        total_pages: Math.ceil(searchEntries.length / limit),
+        total_entries: searchEntries.length,
+        from: null,
+        to: null,
+        generated_at: null,
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    resetDashboardPreload();
+    getLeaderboard.mockReset();
+    runCloudUsageSyncNow.mockReset();
+    runCloudUsageSyncNow.mockResolvedValue(undefined);
+    openLoginModalMock.mockReset();
+    window.localStorage.clear();
+  });
+
+  it("finds a participant across pages and jumps to their rank", async () => {
+    const user = userEvent.setup();
+    mockPaginatedLeaderboard();
+    const { container } = renderLeaderboard();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Coder 1").length).toBeGreaterThan(0);
+    });
+
+    await act(async () => {
+      await user.type(screen.getByRole("searchbox"), "bob");
+    });
+
+    const result = await screen.findByRole("button", {
+      name: "Show Bob Builder at rank 25",
+    });
+    expect(screen.getByText("1 found")).toBeInTheDocument();
+
+    await act(async () => {
+      await user.click(result);
+    });
+
+    await waitFor(() => {
+      expect(getLeaderboard).toHaveBeenCalledWith(
+        expect.objectContaining({ limit: 20, offset: 20 }),
+      );
+    });
+    await waitFor(() => {
+      expect(container.querySelector("tbody tr.ring-2")).not.toBeNull();
+    });
+  });
+
+  it("reports no matches and ignores short queries", async () => {
+    const user = userEvent.setup();
+    mockPaginatedLeaderboard();
+    renderLeaderboard();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Coder 1").length).toBeGreaterThan(0);
+    });
+
+    const box = screen.getByRole("searchbox");
+    await act(async () => {
+      await user.type(box, "zzz");
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/No participants match/)).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      await user.clear(box);
+      await user.type(box, "b");
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/No participants match/)).toBeNull();
+    });
+    expect(screen.queryByText(/found/)).toBeNull();
+  });
+});

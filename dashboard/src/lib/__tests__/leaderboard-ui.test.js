@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterEntriesByName,
   getPaginationFlags,
+  hasItems,
   pageContainingRank,
   prependMeRowToPage,
 } from "../leaderboard-ui";
@@ -98,5 +100,49 @@ describe("pageContainingRank", () => {
     expect(pageContainingRank(null, 20)).toBeNull();
     expect(pageContainingRank(5, 0)).toBeNull();
     expect(pageContainingRank("x", 20)).toBeNull();
+  });
+});
+
+describe("hasItems", () => {
+  it("reports non-empty lists only", () => {
+    expect(hasItems([1])).toBe(true);
+    expect(hasItems([])).toBe(false);
+    expect(hasItems(null)).toBe(false);
+    expect(hasItems("x")).toBe(false);
+  });
+});
+
+describe("filterEntriesByName", () => {  const entries = [
+    { rank: 5, display_name: "Alice Cooper", total_tokens: "50" },
+    { rank: 2, display_name: "bob", total_tokens: "20" },
+    { rank: 9, display_name: "Bobby Tables", total_tokens: "90" },
+    { rank: 3, display_name: "Anonymous", total_tokens: "30" },
+    { rank: null, display_name: "Rankless Bob", total_tokens: "1" },
+    { rank: 7, display_name: null, total_tokens: "70" },
+  ];
+
+  it("matches case-insensitively and sorts by rank", () => {
+    const result = filterEntriesByName(entries, "bob");
+    expect(result.map((e) => e.display_name)).toEqual([
+      "bob",
+      "Bobby Tables",
+      "Rankless Bob",
+    ]);
+  });
+
+  it("ignores queries shorter than the minimum length", () => {
+    expect(filterEntriesByName(entries, "b")).toEqual([]);
+    expect(filterEntriesByName(entries, " ")).toEqual([]);
+    expect(filterEntriesByName(entries, null)).toEqual([]);
+  });
+
+  it("caps the result list at the given limit", () => {
+    const result = filterEntriesByName(entries, "bob", 2);
+    expect(result).toHaveLength(2);
+    expect(result[0].display_name).toBe("bob");
+  });
+
+  it("returns an empty list when nothing matches", () => {
+    expect(filterEntriesByName(entries, "zzz")).toEqual([]);
   });
 });

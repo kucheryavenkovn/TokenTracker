@@ -1,5 +1,6 @@
-import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, Link } from "react-router-dom";
+import { Search as SearchIcon, X as ClearIcon } from "lucide-react";
 import { Select } from "../ui/components";
 import { motion } from "motion/react";
 import {
@@ -29,7 +30,13 @@ import { CURRENCY_USD, getCurrencySymbol } from "../lib/currency";
 import {
   buildPageItems,
   clampInt,
+  filterEntriesByName,
   getPaginationFlags,
+  hasItems,
+  LEADERBOARD_SEARCH_CONCURRENCY,
+  LEADERBOARD_SEARCH_MIN_LENGTH,
+  LEADERBOARD_SEARCH_PAGE_LIMIT,
+  normalizeSearchQuery,
   pageContainingRank,
   prependMeRowToPage,
 } from "../lib/leaderboard-ui";
@@ -288,6 +295,7 @@ function MobileLeaderboardRow({
   rate,
   orderedColumns,
   placeholder,
+  highlighted,
   onOpenProfile,
 }) {
   if (entry?.is_ellipsis) {
@@ -324,6 +332,7 @@ function MobileLeaderboardRow({
       aria-label={rowClickable ? copy("leaderboard.profile_modal.row_aria", { name: rowName }) : undefined}
       className={cn(
         "relative mx-0 my-1 rounded-xl px-3.5 py-3 transition-all duration-200 border shadow-sm select-none",
+        highlighted && "ring-2 ring-oai-brand-400/70 dark:ring-oai-brand-500/60",
         isMe
           ? "bg-gradient-to-br from-oai-brand-50/70 via-oai-brand-50/20 to-transparent dark:from-oai-brand-950/20 dark:via-oai-brand-950/5 dark:to-transparent border-oai-brand-200/60 dark:border-oai-brand-500/25"
           : isAnon
@@ -600,6 +609,90 @@ export function LeaderboardPage({
     return "unavailable";
   }, [authLoading, cloudSignedIn, leaderboardBaseUrl, mockEnabled, signedIn]);
 
+  // Participant search: the leaderboard API has no server-side search, so the
+  // first search of a period pulls every page (limit 100, bounded
+  // concurrency), caches the entries, and filters client-side. Later
+  // keystrokes filter the cache instantly.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [searchStatus, setSearchStatus] = useState("idle");
+  const [searchResults, setSearchResults] = useState([]);
+  const [highlightUserId, setHighlightUserId] = useState(null);
+  const [highlightPage, setHighlightPage] = useState(null);
+  const searchCacheRef = useRef(new Map());
+  const searchRunRef = useRef(0);
+
+  useEffect(() => {
+    searchCacheRef.current.clear();
+    setSearchStatus("idle");
+    setSearchResults([]);
+    setAppliedQuery("");
+  }, [period, listReloadToken]);
+
+  const fetchAllEntriesForSearch = useCallback(async () => {
+    const cached = searchCacheRef.current.get(period);
+    if (cached) return cached;
+    const baseParams = {
+      baseUrl: leaderboardBaseUrl,
+      userId: cloudUser?.id || null,
+      period,
+      limit: LEADERBOARD_SEARCH_PAGE_LIMIT,
+      offset: 0,
+    };
+    const first = await getLeaderboard(baseParams);
+    const total = Number(first?.total_entries) || 0;
+    const all = Array.isArray(first?.entries) ? first.entries.slice() : [];
+    const offsets = [];
+    for (let off = LEADERBOARD_SEARCH_PAGE_LIMIT; off < total; off += LEADERBOARD_SEARCH_PAGE_LIMIT) {
+      offsets.push(off);
+    }
+    for (let i = 0; i < offsets.length; i += LEADERBOARD_SEARCH_CONCURRENCY) {
+      const batch = offsets.slice(i, i + LEADERBOARD_SEARCH_CONCURRENCY);
+      const pages = await Promise.all(
+        batch.map((off) => getLeaderboard({ ...baseParams, offset: off })),
+      );
+      for (const page of pages) {
+        if (Array.isArray(page?.entries)) all.push(...page.entries);
+      }
+    }
+    searchCacheRef.current.set(period, all);
+    return all;
+  }, [cloudUser?.id, leaderboardBaseUrl, period]);
+
+  useEffect(() => {
+    const normalized = normalizeSearchQuery(searchQuery);
+    if (normalized.length < LEADERBOARD_SEARCH_MIN_LENGTH) {
+      setSearchStatus("idle");
+      setSearchResults([]);
+      setAppliedQuery("");
+      return undefined;
+    }
+    if ((!leaderboardBaseUrl && !mockEnabled) || leaderboardAccessMode === "unavailable") {
+      return undefined;
+    }
+    searchRunRef.current += 1;
+    const runId = searchRunRef.current;
+    setSearchStatus("searching");
+    let active = true;
+    const timer = setTimeout(() => {
+      fetchAllEntriesForSearch()
+        .then((all) => {
+          if (!active || searchRunRef.current !== runId) return;
+          setAppliedQuery(searchQuery.trim());
+          setSearchResults(filterEntriesByName(all, normalized));
+          setSearchStatus("done");
+        })
+        .catch(() => {
+          if (!active || searchRunRef.current !== runId) return;
+          setSearchStatus("error");
+        });
+    }, 350);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, period, leaderboardAccessMode, leaderboardBaseUrl, mockEnabled, fetchAllEntriesForSearch]);
+
   const leaderboardPreloadContextKey = useMemo(
     () =>
       getLeaderboardPreloadContextKey({
@@ -732,6 +825,10 @@ export function LeaderboardPage({
   const totalPages = listData?.total_pages ?? null;
   const totalEntries = listData?.total_entries ?? 0;
   const currentPage = listData?.page ?? listPage;
+  const highlightedUserId =
+    highlightUserId != null && highlightPage != null && highlightPage === currentPage
+      ? highlightUserId
+      : null;
   const pageItems = useMemo(() => {
     return buildPageItems(currentPage, totalPages);
   }, [currentPage, totalPages]);
@@ -763,6 +860,18 @@ export function LeaderboardPage({
   const handleJumpToMe = useCallback(() => {
     if (myPage != null) setListPage(myPage);
   }, [myPage]);
+
+  // Jump to a search result's page and pin a highlight on its row. The
+  // highlight is derived against the loaded page so stale pins never stick
+  // after the user navigates elsewhere.
+  const handleJumpToResult = useCallback((entry) => {
+    const page = pageContainingRank(entry?.rank, pageSize);
+    if (page != null) setListPage(page);
+    const uid =
+      typeof entry?.user_id === "string" && entry.user_id.trim() ? entry.user_id.trim() : null;
+    setHighlightUserId(uid);
+    setHighlightPage(page);
+  }, [pageSize]);
 
   const handleEnableSync = async () => {
     setSyncing(true);
@@ -933,6 +1042,7 @@ export function LeaderboardPage({
                   className={cn(
                     "group transition-colors",
                     rowClickable && "cursor-pointer hover:bg-oai-gray-50 dark:hover:bg-oai-gray-900/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-oai-brand-500/60",
+                    highlightedUserId != null && profileUserId != null && profileUserId === highlightedUserId && "ring-2 ring-inset ring-oai-brand-400/70 dark:ring-oai-brand-500/60",
                   )}
                 >
                   <td className={cn(lbStickyTdRank(false), "font-medium text-oai-gray-500 dark:text-oai-gray-400")}>
@@ -992,6 +1102,7 @@ export function LeaderboardPage({
               rate={rate}
               orderedColumns={orderedColumns}
               placeholder={placeholder}
+              highlighted={highlightedUserId != null && entry?.user_id === highlightedUserId}
               onOpenProfile={openProfileModal}
             />
           );
@@ -1139,6 +1250,87 @@ export function LeaderboardPage({
               </button>
             </div>
           )}
+
+          <div className="mb-4">
+            <div className="relative">
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-oai-gray-400 dark:text-oai-gray-500"
+              >
+                <SearchIcon size={15} />
+              </span>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder={copy("leaderboard.search.placeholder")}
+                aria-label={copy("leaderboard.search.label")}
+                className="w-full rounded-xl border border-oai-gray-200 bg-white py-2.5 pl-9 pr-9 text-sm text-oai-black placeholder:text-oai-gray-400 focus:border-oai-brand-400 focus:outline-none dark:border-oai-gray-800 dark:bg-oai-gray-950 dark:text-white dark:placeholder:text-oai-gray-500"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  aria-label={copy("leaderboard.search.clear")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-oai-gray-400 transition-colors hover:text-oai-black dark:text-oai-gray-500 dark:hover:text-white"
+                >
+                  <ClearIcon size={15} />
+                </button>
+              )}
+            </div>
+            {searchStatus === "searching" && (
+              <p className="mt-2 text-xs text-oai-gray-400 dark:text-oai-gray-500" role="status">
+                {copy("leaderboard.search.searching")}
+              </p>
+            )}
+            {searchStatus === "error" && (
+              <p className="mt-2 text-xs text-red-500 dark:text-red-400" role="alert">
+                {copy("leaderboard.search.error")}
+              </p>
+            )}
+            {searchStatus === "done" && hasItems(searchResults) && (
+              <div className="mt-2 overflow-hidden rounded-xl border border-oai-gray-200 dark:border-oai-gray-800">
+                <p className="border-b border-oai-gray-100 px-3.5 py-2 text-[11px] font-medium uppercase tracking-wider text-oai-gray-400 dark:border-oai-gray-800 dark:text-oai-gray-500">
+                  {copy("leaderboard.search.results_count", { count: searchResults.length })}
+                </p>
+                <ul className="max-h-64 divide-y divide-oai-gray-100 overflow-y-auto dark:divide-oai-gray-800/60">
+                  {searchResults.map((entry) => {
+                    const key = entry?.user_id || `${entry?.rank}-${entry?.display_name}`;
+                    const rawName = normalizeName(entry?.display_name);
+                    const name = entry?.is_me ? meLabel : rawName;
+                    return (
+                      <li key={key}>
+                        <button
+                          type="button"
+                          onClick={() => handleJumpToResult(entry)}
+                          aria-label={copy("leaderboard.search.result_aria", {
+                            name,
+                            rank: entry?.rank ?? placeholder,
+                          })}
+                          className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-oai-gray-50 dark:hover:bg-oai-gray-900/60"
+                        >
+                          <span className="w-12 shrink-0 text-xs font-semibold tabular-nums text-oai-gray-500 dark:text-oai-gray-400">
+                            #{entry?.rank ?? placeholder}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium text-oai-gray-800 dark:text-oai-gray-200">
+                            {name}
+                          </span>
+                          <span className="shrink-0 text-xs tabular-nums text-oai-gray-500 dark:text-oai-gray-400">
+                            <TotalTokens value={entry?.total_tokens} />
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+            {searchStatus === "done" && !hasItems(searchResults) && (
+              <p className="mt-2 text-xs text-oai-gray-400 dark:text-oai-gray-500">
+                {copy("leaderboard.search.no_results", { q: appliedQuery })}
+              </p>
+            )}
+          </div>
 
           <div className="sm:rounded-xl sm:border sm:border-oai-gray-200 sm:dark:border-oai-gray-800 sm:overflow-hidden border-none bg-transparent">
             {currentListState.error && hasEntries ? (
