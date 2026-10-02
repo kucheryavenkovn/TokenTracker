@@ -657,7 +657,7 @@ interface HourlyRow {
   user_id: string;
   source: string;
   model: string;
-  hour_start: string;
+  hour_start?: string;
   total_tokens: number;
   input_tokens: number;
   output_tokens: number;
@@ -666,6 +666,48 @@ interface HourlyRow {
   reasoning_output_tokens: number;
   total_cost_usd?: number | null;
   pricing_tier?: string;
+}
+
+interface CompactLeaderboardUsage {
+  format: string;
+  user_ids: string[];
+  sources: string[];
+  model_names: string[];
+  pricing_tiers: (string | null)[];
+  rows: [number, number, number, number, number, number, number, number, number, number, number | null][];
+}
+
+// The database keeps every original token column and pricing dimension. Expand
+// the internal wire format before the existing aggregation and pricing loop.
+function decodeCompactLeaderboardUsage(payload: CompactLeaderboardUsage): HourlyRow[] {
+  if (payload?.format !== "leaderboard-usage-v1"
+    || !Array.isArray(payload.user_ids) || !Array.isArray(payload.sources)
+    || !Array.isArray(payload.model_names) || !Array.isArray(payload.pricing_tiers)
+    || !Array.isArray(payload.rows)) {
+    throw new Error("Invalid compact leaderboard payload");
+  }
+  const dimensions = [payload.user_ids, payload.sources, payload.model_names, payload.pricing_tiers];
+  return payload.rows.map((row) => {
+    if (!Array.isArray(row) || row.length !== 11
+      || [row[0], row[1], row[2], row[3]].some((index, dim) => !Number.isInteger(index)
+        || index < 0 || index >= dimensions[dim].length)) {
+      throw new Error("Invalid compact leaderboard row");
+    }
+    const pricingTier = payload.pricing_tiers[row[3]];
+    return {
+      user_id: payload.user_ids[row[0]],
+      source: payload.sources[row[1]],
+      model: payload.model_names[row[2]],
+      total_tokens: row[4],
+      input_tokens: row[5],
+      output_tokens: row[6],
+      cached_input_tokens: row[7],
+      cache_creation_input_tokens: row[8],
+      reasoning_output_tokens: row[9],
+      ...(pricingTier != null ? { pricing_tier: pricingTier } : {}),
+      ...(row[10] != null ? { total_cost_usd: row[10] } : {}),
+    };
+  });
 }
 
 interface UserAgg {
@@ -1068,12 +1110,12 @@ export default async function (req: Request): Promise<Response> {
       // replaced by a compact rollup. Eight disjoint UUID ranges keep every
       // response bounded while retaining model/pricing-tier rows for the one
       // canonical TypeScript pricing implementation below.
-      const totalRows: unknown[] = [];
+      const totalRows: HourlyRow[] = [];
       for (let shardIndex = 0; shardIndex < TOTAL_USER_SHARDS.length; shardIndex += 2) {
         const shardBatch = await Promise.all(
           TOTAL_USER_SHARDS.slice(shardIndex, shardIndex + 2).map(({ from, to }) =>
             client.database.rpc(
-              "leaderboard_usage_grouped_total_shard",
+              "leaderboard_usage_compact_total_shard",
               { p_to: rangeEnd, p_user_from: from, p_user_to: to },
             )
           ),
@@ -1084,17 +1126,17 @@ export default async function (req: Request): Promise<Response> {
           break;
         }
         for (const result of shardBatch) {
-          if (Array.isArray(result.data)) totalRows.push(...result.data);
+          totalRows.push(...decodeCompactLeaderboardUsage(result.data as CompactLeaderboardUsage));
         }
       }
       groupedData = rpcErr ? null : totalRows;
     } else {
       const result = await client.database.rpc(
-        "leaderboard_usage_grouped",
+        "leaderboard_usage_compact",
         { p_from: rangeStart, p_to: rangeEnd },
       );
-      groupedData = result.data;
       rpcErr = result.error;
+      groupedData = rpcErr ? null : decodeCompactLeaderboardUsage(result.data as CompactLeaderboardUsage);
     }
     const __tAfterRpc = Date.now();
     if (rpcErr) {

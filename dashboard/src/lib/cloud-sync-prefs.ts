@@ -6,11 +6,14 @@ const KEY_USAGE_READY = "tokentracker_cloud_usage_ready_v1";
 export const CLOUD_USAGE_SYNCED_EVENT = "tt.cloudUsageSynced";
 export const CLOUD_LEADERBOARD_REFRESHED_EVENT = "tt.cloudLeaderboardRefreshed";
 let memoryDeviceSession: CloudDeviceSession | null = null;
+let cloudDeviceSessionGeneration = 0;
 
 export type CloudDeviceSession = {
   token: string;
   deviceId: string;
   issuedAt: string;
+  ownerId?: string;
+  generation?: number;
 };
 
 function clearLegacyStoredDeviceSession(): void {
@@ -51,7 +54,10 @@ export function setCloudSyncEnabled(enabled: boolean): void {
   } catch {
     /* ignore */
   }
-  if (!enabled) setCloudUsageReady(false);
+  if (!enabled) {
+    clearCloudDeviceSession();
+    setCloudUsageReady(false);
+  }
   // Mirror the toggle to the local CLI server (best-effort, localhost only) so
   // the auth-unaware native popover can gate its cross-device "account view" on
   // the same preference. The dashboard remains the source of truth; this is a
@@ -112,17 +118,24 @@ export function getCurrentDeviceId(): string {
   }
 }
 
-export function setStoredDeviceSession(session: CloudDeviceSession): void {
-  memoryDeviceSession = session;
+export function getCloudDeviceSessionGeneration(): number {
+  return cloudDeviceSessionGeneration;
+}
+
+export function setStoredDeviceSession(session: CloudDeviceSession, expectedGeneration = cloudDeviceSessionGeneration): boolean {
+  if (expectedGeneration !== cloudDeviceSessionGeneration) return false;
+  memoryDeviceSession = { ...session, generation: expectedGeneration };
   try {
     if (session.deviceId) localStorage.setItem(KEY_DEVICE_ID, session.deviceId);
   } catch {
     /* non-secret marker remains memory-only when storage is unavailable */
   }
   clearLegacyStoredDeviceSession();
+  return true;
 }
 
 export function clearCloudDeviceSession(): void {
+  cloudDeviceSessionGeneration += 1;
   memoryDeviceSession = null;
   try {
     localStorage.removeItem(KEY_LAST_SYNC);

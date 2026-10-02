@@ -303,7 +303,7 @@ test("usage-summary?account=1 serves the cross-device aggregate when signed in +
     if (String(urlStr).includes("/api/auth/refresh")) {
       return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
     }
-    if (String(urlStr).includes("/functions/tokentracker-account-summary")) {
+    if (String(urlStr).includes("/tokentracker-account-summary")) {
       assert.equal(opts.headers.Authorization, `Bearer ${accessJwt}`);
       return { ok: true, status: 200, json: async () => accountPayload };
     }
@@ -318,7 +318,7 @@ test("usage-summary?account=1 serves the cross-device aggregate when signed in +
     assert.equal(res._headers["x-tokentracker-account-view"], "1");
     assert.deepEqual(res.json(), accountPayload);
     assert.ok(seen.some((u) => u.includes("/api/auth/refresh")));
-    assert.ok(seen.some((u) => u.includes("/functions/tokentracker-account-summary")));
+    assert.ok(seen.some((u) => u.includes("/tokentracker-account-summary")));
   } finally {
     global.fetch = realFetch;
   }
@@ -359,7 +359,7 @@ test("usage-hourly?account=1 serves account hourly data when signed in + cloud s
     if (String(urlStr).includes("/api/auth/refresh")) {
       return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
     }
-    if (String(urlStr).includes("/functions/tokentracker-account-hourly")) {
+    if (String(urlStr).includes("/tokentracker-account-hourly")) {
       assert.equal(opts.headers.Authorization, `Bearer ${accessJwt}`);
       return { ok: true, status: 200, json: async () => accountPayload };
     }
@@ -373,7 +373,7 @@ test("usage-hourly?account=1 serves account hourly data when signed in + cloud s
     });
     assert.equal(res._headers["x-tokentracker-account-view"], "1");
     assert.deepEqual(res.json(), accountPayload);
-    assert.ok(seen.some((u) => u.includes("/functions/tokentracker-account-hourly")));
+    assert.ok(seen.some((u) => u.includes("/tokentracker-account-hourly")));
   } finally {
     global.fetch = realFetch;
   }
@@ -401,7 +401,7 @@ test("usage-hourly?account=1 falls back to local hourly data when account hourly
     if (String(urlStr).includes("/api/auth/refresh")) {
       return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
     }
-    if (String(urlStr).includes("/functions/tokentracker-account-hourly")) {
+    if (String(urlStr).includes("/tokentracker-account-hourly")) {
       return { ok: false, status: 500, json: async () => ({ error: "boom" }) };
     }
     throw new Error(`unexpected fetch ${urlStr}`);
@@ -449,7 +449,7 @@ test("usage-hourly?account=1 falls back to local hourly data when account hourly
     if (String(urlStr).includes("/api/auth/refresh")) {
       return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
     }
-    if (String(urlStr).includes("/functions/tokentracker-account-hourly")) {
+    if (String(urlStr).includes("/tokentracker-account-hourly")) {
       return new Promise((resolve, reject) => {
         const t = setTimeout(() => {
           resolve({ ok: true, status: 200, json: async () => ({ day: "2026-04-20", data: [] }) });
@@ -552,7 +552,7 @@ test("a failing account read is tagged transient, not as a local view", async ()
     if (String(urlStr).includes("/api/auth/refresh")) {
       return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
     }
-    if (String(urlStr).includes("/functions/tokentracker-account-heatmap")) {
+    if (String(urlStr).includes("/tokentracker-account-heatmap")) {
       return { ok: false, status: 502, json: async () => ({ error: "bad gateway" }) };
     }
     throw new Error(`unexpected fetch ${urlStr}`);
@@ -581,7 +581,7 @@ test("an account read that times out is tagged transient-timeout", async () => {
     if (String(urlStr).includes("/api/auth/refresh")) {
       return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
     }
-    if (String(urlStr).includes("/functions/tokentracker-account-heatmap")) {
+    if (String(urlStr).includes("/tokentracker-account-heatmap")) {
       return new Promise((resolve, reject) => {
         const t = setTimeout(() => resolve({ ok: true, status: 200, json: async () => ({}) }), 10000);
         opts?.signal?.addEventListener("abort", () => {
@@ -663,7 +663,7 @@ test("a successful account read carries no fallback header", async () => {
     if (String(urlStr).includes("/api/auth/refresh")) {
       return { ok: true, status: 200, json: async () => ({ accessToken: accessJwt }) };
     }
-    if (String(urlStr).includes("/functions/tokentracker-account-heatmap")) {
+    if (String(urlStr).includes("/tokentracker-account-heatmap")) {
       return { ok: true, status: 200, json: async () => payload };
     }
     throw new Error(`unexpected fetch ${urlStr}`);
@@ -701,7 +701,7 @@ test("one popover refresh mints ONE access token across concurrent account reads
         json: async () => ({ accessToken: accessJwt, refreshToken: "rotated-1" }),
       };
     }
-    if (u.includes("/functions/tokentracker-account-")) {
+    if (u.includes("/tokentracker-account-")) {
       return { ok: true, status: 200, json: async () => ({ ok: true }) };
     }
     throw new Error(`unexpected fetch ${urlStr}`);
@@ -722,4 +722,158 @@ test("one popover refresh mints ONE access token across concurrent account reads
   } finally {
     global.fetch = realFetch;
   }
+});
+
+test("loopback account reads invalidate on successful-upload state, reset, and explicit refresh", async (t) => {
+  const http = require("node:http");
+  const queuePath = path.join(tmpHome, "queue.jsonl");
+  writeQueue(queuePath, [SAMPLE_ROW]);
+  const trackerDir = path.join(tmpHome, ".tokentracker", "tracker");
+  fs.mkdirSync(trackerDir, { recursive: true });
+  fs.writeFileSync(path.join(trackerDir, "relay-cookies.json"), JSON.stringify({
+    insforge_refresh_token: "insforge_refresh_token=upload-test; Path=/; HttpOnly; SameSite=Lax",
+  }));
+  const statePath = path.join(tmpHome, "queue.state.json");
+  fs.writeFileSync(statePath, JSON.stringify({ offset: 100, updatedAt: "first" }));
+  const handler = freshHandler(queuePath);
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    handler(req, res, url).catch(() => { res.statusCode = 500; res.end(); });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
+  const realFetch = global.fetch;
+  let edgeCalls = 0;
+  const token = `e30.${Buffer.from(JSON.stringify({ sub: "upload-user", exp: Date.now() / 1000 + 3600 })).toString("base64url")}.sig`;
+  global.fetch = async (url) => {
+    if (String(url).includes("/api/auth/refresh")) return { ok: true, json: async () => ({ accessToken: token }) };
+    edgeCalls += 1;
+    return { ok: true, json: async () => ({ totals: { total_tokens: edgeCalls } }) };
+  };
+  t.after(() => { global.fetch = realFetch; });
+  const root = `http://127.0.0.1:${server.address().port}`;
+  const endpoint = "/functions/tokentracker-usage-summary?from=2026-10-01&to=2026-10-02&account=1";
+  const read = async (suffix = "") => {
+    const response = await realFetch(root + endpoint + suffix);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("x-tokentracker-account-view"), "1");
+    return (await response.json()).totals.total_tokens;
+  };
+  assert.equal(await read(), 1);
+  assert.equal(await read(), 1);
+  fs.writeFileSync(statePath, JSON.stringify({ offset: 200, updatedAt: "second" }));
+  assert.equal(await read(), 2);
+  assert.equal(await read(), 2);
+  // A rewritten queue can finish a successful upload at the same byte offset.
+  fs.writeFileSync(statePath, JSON.stringify({ offset: 200, updatedAt: "rewrite" }));
+  assert.equal(await read(), 3);
+  fs.writeFileSync(statePath, JSON.stringify({ offset: 0, updatedAt: "reset" }));
+  assert.equal(await read(), 4);
+  fs.unlinkSync(statePath);
+  assert.equal(await read(), 5);
+  assert.equal(await read(), 5);
+  assert.equal(await read("&refresh=1"), 6);
+  assert.equal(await read(), 6);
+  assert.equal(edgeCalls, 6);
+});
+
+test("logout and account switch during an HTTP account read cannot restore the old relay token", async (t) => {
+  const http = require("node:http");
+  const queuePath = path.join(tmpHome, "queue.jsonl");
+  writeQueue(queuePath, [SAMPLE_ROW]);
+  const trackerDir = path.join(tmpHome, ".tokentracker", "tracker");
+  fs.mkdirSync(trackerDir, { recursive: true });
+  const cookiePath = path.join(trackerDir, "relay-cookies.json");
+  fs.writeFileSync(cookiePath, JSON.stringify({ insforge_refresh_token: "insforge_refresh_token=a; Path=/; HttpOnly; SameSite=Lax" }));
+  const handler = freshHandler(queuePath);
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    handler(req, res, url).catch(() => { res.statusCode = 500; res.end(); });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
+  const root = `http://127.0.0.1:${server.address().port}`;
+  const realFetch = global.fetch;
+  const jwt = (sub) => `e30.${Buffer.from(JSON.stringify({ sub, exp: Date.now() / 1000 + 3600 })).toString("base64url")}.sig`;
+  const tokenA = jwt("user-a");
+  const tokenB = jwt("user-b");
+  let started;
+  const seenA = new Promise((resolve) => { started = resolve; });
+  let release;
+  const responseA = new Promise((resolve) => { release = resolve; });
+  global.fetch = async (url, init) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === "/api/auth/logout") return new Response("{}", { headers: { "content-type": "application/json" } });
+    if (pathname === "/api/auth/sign-in") return new Response(JSON.stringify({ refreshToken: "b", csrfToken: "csrf-b" }), { headers: { "content-type": "application/json" } });
+    if (pathname === "/api/auth/refresh") {
+      const account = JSON.parse(init.body).refresh_token;
+      return { ok: true, json: async () => ({ accessToken: account === "a" ? tokenA : tokenB, refreshToken: account === "a" ? "rotated-a" : "rotated-b" }) };
+    }
+    if (init.headers.Authorization === `Bearer ${tokenA}`) {
+      started();
+      return responseA;
+    }
+    return { ok: true, json: async () => ({ totals: { total_tokens: 987 } }) };
+  };
+  t.after(() => { global.fetch = realFetch; });
+  const endpoint = "/functions/tokentracker-usage-summary?from=2026-04-20&to=2026-04-20&account=1";
+  const oldRead = realFetch(root + endpoint);
+  await seenA;
+  assert.equal((await realFetch(root + "/api/auth/logout", { method: "POST" })).status, 200);
+  assert.equal(fs.existsSync(cookiePath), false);
+  assert.equal((await realFetch(root + "/api/auth/sign-in", { method: "POST" })).status, 200);
+  const newRead = await realFetch(root + endpoint);
+  assert.equal(newRead.headers.get("x-tokentracker-account-view"), "1");
+  assert.equal((await newRead.json()).totals.total_tokens, 987);
+  release({ ok: true, json: async () => ({ totals: { total_tokens: 12345 } }) });
+  const oldResponse = await oldRead;
+  assert.equal(oldResponse.status, 409);
+  assert.equal(oldResponse.headers.get("x-tokentracker-account-view"), null);
+  assert.deepEqual(await oldResponse.json(), { error: "Account session changed", code: "auth_session_changed" });
+  const persisted = JSON.parse(fs.readFileSync(cookiePath, "utf8"));
+  assert.ok(persisted.insforge_refresh_token.includes("rotated-b"));
+  assert.ok(!persisted.insforge_refresh_token.includes("rotated-a"));
+});
+
+test("a late HTTP auth refresh cannot overwrite a new login's relay cookies", async (t) => {
+  const http = require("node:http");
+  const queuePath = path.join(tmpHome, "queue.jsonl");
+  writeQueue(queuePath, [SAMPLE_ROW]);
+  const trackerDir = path.join(tmpHome, ".tokentracker", "tracker");
+  fs.mkdirSync(trackerDir, { recursive: true });
+  const cookiePath = path.join(trackerDir, "relay-cookies.json");
+  fs.writeFileSync(cookiePath, JSON.stringify({ insforge_refresh_token: "insforge_refresh_token=a; Path=/; HttpOnly; SameSite=Lax" }));
+  const handler = freshHandler(queuePath);
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://localhost");
+    handler(req, res, url).catch(() => { res.statusCode = 500; res.end(); });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }));
+  const root = `http://127.0.0.1:${server.address().port}`;
+  const realFetch = global.fetch;
+  let started;
+  const seenRefresh = new Promise((resolve) => { started = resolve; });
+  let release;
+  const responseA = new Promise((resolve) => { release = resolve; });
+  global.fetch = async (url) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === "/api/auth/refresh") { started(); return responseA; }
+    return new Response(JSON.stringify(pathname === "/api/auth/sign-in" ? { refreshToken: "b", csrfToken: "csrf-b" } : {}), { headers: { "content-type": "application/json" } });
+  };
+  t.after(() => { global.fetch = realFetch; });
+  const oldRefresh = realFetch(root + "/api/auth/refresh", { method: "POST" });
+  await seenRefresh;
+  assert.equal((await realFetch(root + "/api/auth/logout", { method: "POST" })).status, 200);
+  assert.equal((await realFetch(root + "/api/auth/sign-in", { method: "POST" })).status, 200);
+  release(new Response(JSON.stringify({ refreshToken: "rotated-a", csrfToken: "csrf-a" }), {
+    headers: { "content-type": "application/json", "set-cookie": "insforge_refresh_token=rotated-a; Path=/; HttpOnly" },
+  }));
+  const response = await oldRefresh;
+  assert.equal(response.status, 409);
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.deepEqual(await response.json(), { error: "Account session changed", code: "auth_session_changed" });
+  const persisted = JSON.parse(fs.readFileSync(cookiePath, "utf8"));
+  assert.ok(persisted.insforge_refresh_token.startsWith("insforge_refresh_token=b;"));
+  assert.ok(!persisted.insforge_refresh_token.includes("rotated-a"));
 });

@@ -601,6 +601,46 @@ interface CompactDaily {
     number | string, number | string, number | string, number | string][];
 }
 
+interface DailyWire {
+  model_names: (string | null)[];
+  source_names: (string | null)[];
+  pricing_tiers: (string | null)[];
+  days: [string, number | string, number | string, number | string, number | string,
+    number | string, number | string, number | string, (number | string)[] | null][];
+  cost_dims: [string, number, number, number, number | string, number | string,
+    number | string, number | string, number | string][];
+}
+
+// Expand the database-only dictionary before the existing response logic.
+// Keep values untouched here; pricing/output performs the same Number() coercion
+// as it did for the original compact RPC.
+function expandModelPairs(
+  pairs: (number | string)[] | null,
+  modelNames: (string | null)[],
+): Record<string, number | string> | null {
+  if (pairs === null) return null;
+  const entries: [string, number | string][] = [];
+  for (let i = 0; i < pairs.length; i += 2) {
+    entries.push([modelNames[Number(pairs[i])] as string, pairs[i + 1]]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function decodeDailyWire(data: unknown): CompactDaily {
+  const payload = (data ?? {}) as Partial<DailyWire>;
+  const modelNames = Array.isArray(payload.model_names) ? payload.model_names : [];
+  const sourceNames = Array.isArray(payload.source_names) ? payload.source_names : [];
+  const pricingTiers = Array.isArray(payload.pricing_tiers) ? payload.pricing_tiers : [];
+  return {
+    days: (Array.isArray(payload.days) ? payload.days : []).map(([day, tt, i, o, cr, cw, rs, cv, pairs]) =>
+      [day, tt, i, o, cr, cw, rs, cv, expandModelPairs(pairs, modelNames)]
+    ),
+    cost_dims: (Array.isArray(payload.cost_dims) ? payload.cost_dims : []).map(([day, source, model, tier, i, o, cr, cw, rs]) =>
+      [day, sourceNames[source], modelNames[model], pricingTiers[tier], i, o, cr, cw, rs]
+    ),
+  };
+}
+
 const COMPACT_TTL_MS = 30_000;
 const COMPACT_STALE_IF_ERROR_MS = 5 * 60_000;
 const compactCache = new Map<string, { fetchedAt: number; value: CompactDaily }>();
@@ -636,7 +676,7 @@ async function fetchCompactDaily(
 
   const pending = (async () => {
     try {
-      const { data, error } = await client.database.rpc("account_daily_compact", {
+      const { data, error } = await client.database.rpc("account_daily_wire", {
         p_user_id: userId,
         p_device_id: requestedDeviceId,
         p_from: fromIso,
@@ -647,11 +687,7 @@ async function fetchCompactDaily(
         p_range_to: rangeTo,
       });
       if (error) throw new Error(error.message);
-      const payload = (data ?? {}) as Partial<CompactDaily>;
-      const value: CompactDaily = {
-        days: Array.isArray(payload.days) ? payload.days : [],
-        cost_dims: Array.isArray(payload.cost_dims) ? payload.cost_dims : [],
-      };
+      const value = decodeDailyWire(data);
       compactCache.set(cacheKey, { fetchedAt: Date.now(), value });
       if (compactCache.size > 64) {
         const oldest = compactCache.keys().next().value;

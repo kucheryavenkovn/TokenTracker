@@ -862,8 +862,9 @@ test("local sync scopes relayed device token cache by InsForge base URL", async 
         json: async () => ({ accessToken: "default-access-token" }),
       };
     }
-    if (url.endsWith("/functions/tokentracker-device-token-issue")) {
-      const root = url.slice(0, -"/functions/tokentracker-device-token-issue".length);
+    if (url.endsWith("/tokentracker-device-token-issue")) {
+      const root = url.startsWith("https://srctyff5.function2.insforge.app/")
+        ? defaultRoot : url.slice(0, -"/functions/tokentracker-device-token-issue".length);
       return {
         ok: true,
         status: 200,
@@ -910,7 +911,7 @@ test("local sync scopes relayed device token cache by InsForge base URL", async 
     assert.equal(calls[1].options.env.TOKENTRACKER_DEVICE_TOKEN, "default-device-token");
     assert.equal(calls[1].options.env.TOKENTRACKER_INSFORGE_BASE_URL, defaultRoot);
     assert.equal(fetchCalls.filter((c) => c.url.endsWith("/api/auth/refresh?client_type=mobile")).length, 2);
-    assert.equal(fetchCalls.filter((c) => c.url.endsWith("/functions/tokentracker-device-token-issue")).length, 2);
+    assert.equal(fetchCalls.filter((c) => c.url.endsWith("/tokentracker-device-token-issue")).length, 2);
   } finally {
     restore();
     global.fetch = prevFetch;
