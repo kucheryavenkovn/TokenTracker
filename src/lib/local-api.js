@@ -1131,8 +1131,9 @@ function buildProxyHeaders(headers) {
 // Main handler factory
 // ---------------------------------------------------------------------------
 
-function createLocalApiHandler({ queuePath }) {
+function createLocalApiHandler({ queuePath, serverVersion = null }) {
   const qp = queuePath || resolveQueuePath();
+  const normalizedServerVersion = typeof serverVersion === "string" ? serverVersion.trim() : "";
 
   // Server-side cookie relay: captures auth cookies from InsForge cloud responses
   // so that both browser and WKWebView share the same login session via the proxy.
@@ -1581,7 +1582,10 @@ function createLocalApiHandler({ queuePath }) {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
       });
-      res.end(JSON.stringify({ token: localAuthToken }));
+      res.end(JSON.stringify({
+        token: localAuthToken,
+        ...(normalizedServerVersion ? { serverVersion: normalizedServerVersion } : {}),
+      }));
       return true;
     }
 
