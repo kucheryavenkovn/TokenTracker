@@ -694,9 +694,6 @@ export function UsageOverview({
   );
 }
 
-// Renders a single expanded provider section. Hosts loading state for the
-// inline Context Breakdown so the spinner can sit next to the heading instead
-// of taking its own row.
 // Token-type labels for the expandable per-model detail. Reuses the
 // project-composition copy family so no new i18n keys are needed.
 const MODEL_SPLIT_DEFS = [
@@ -707,9 +704,16 @@ const MODEL_SPLIT_DEFS = [
   { key: "reasoning", labelKey: "dashboard.projects.detail.comp_reasoning" },
 ];
 
+// Narrow containers drop the fixed value-column minimums so the row wraps
+// instead of overflowing; sm+ restores the aligned columns and widens the
+// share column to fit the expand/collapse label.
 const MODEL_ROW_GRID =
-  "grid grid-cols-[minmax(0,1fr)_minmax(8rem,max-content)_minmax(5.5rem,max-content)_4rem] items-baseline gap-x-3 mb-1.5";
+  "grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-baseline gap-x-3 mb-1.5 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,max-content)_minmax(5.5rem,max-content)_minmax(7rem,max-content)]";
 
+/**
+ * Renders the five token-type split values (input / cached / cache write /
+ * output / reasoning) under an expanded model row.
+ */
 function ModelTokenSplits({ tokens }) {
   const { formatTokens, formatTokensTooltip } = useTokenFormat();
   return (
@@ -732,6 +736,10 @@ function ModelTokenSplits({ tokens }) {
   );
 }
 
+/**
+ * Grid cells of one model row: name, token total, cost and share. The share
+ * cell carries the expand/collapse hint when the row has token splits.
+ */
 function ModelRowHeader({ model, tokensLabel, costLabel, expandable, isExpanded }) {
   const { formatTokensTooltip } = useTokenFormat();
   return (
@@ -763,6 +771,11 @@ function ModelRowHeader({ model, tokensLabel, costLabel, expandable, isExpanded 
   );
 }
 
+/**
+ * Renders the per-model usage rows for one provider (or the all-models list).
+ * Rows whose backend entry carries token-type splits become expandable; the
+ * expanded state shows the five split values under the row.
+ */
 function ModelUsageRows({ models, color }) {
   const { currency, rate } = useCurrency();
   const { formatTokens } = useTokenFormat();
@@ -851,6 +864,9 @@ function DevinPricingNotice() {
   );
 }
 
+// Renders a single expanded provider section. Hosts loading state for the
+// inline Context Breakdown so the spinner can sit next to the heading instead
+// of taking its own row.
 function ProviderExpandedSection({ provider, color, providerHeading, contextSource, from, to, sortedModels }) {
   const { formatTokens } = useTokenFormat();
   const [breakdownLoading, setBreakdownLoading] = useState(false);

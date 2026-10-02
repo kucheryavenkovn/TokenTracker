@@ -610,13 +610,5 @@
   "quota.pick_two": "最多关注两个周期",
   "quota.reset_in": "{{time}}后重置",
   "quota.close": "关闭组件",
-  "quota.close_hint": "关闭组件；可从托盘菜单重新打开",
-  "leaderboard.search.placeholder": "按名称搜索参与者…",
-  "leaderboard.search.label": "搜索排行榜参与者",
-  "leaderboard.search.searching": "搜索中…",
-  "leaderboard.search.no_results": "没有与“{{q}}”匹配的参与者",
-  "leaderboard.search.results_count": "找到 {{count}} 位",
-  "leaderboard.search.clear": "清除搜索",
-  "leaderboard.search.result_aria": "查看{{name}}（第 {{rank}} 名）",
-  "leaderboard.search.error": "搜索失败，请重试"
+  "quota.close_hint": "关闭组件；可从托盘菜单重新打开"
 }

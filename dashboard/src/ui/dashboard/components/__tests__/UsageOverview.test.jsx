@@ -401,7 +401,11 @@ describe("UsageOverview", () => {
     });
 
     const row = screen.getByText("claude-fable-5").parentElement;
-    expect(row).toHaveClass("grid", "grid-cols-[minmax(0,1fr)_minmax(8rem,max-content)_minmax(5.5rem,max-content)_4rem]");
+    expect(row).toHaveClass(
+      "grid",
+      "grid-cols-[minmax(0,1fr)_auto_auto_auto]",
+      "sm:grid-cols-[minmax(0,1fr)_minmax(8rem,max-content)_minmax(5.5rem,max-content)_minmax(7rem,max-content)]",
+    );
     expect(row.children[1]).toHaveClass("whitespace-nowrap");
     expect(row.children[2]).toHaveClass("whitespace-nowrap");
   });

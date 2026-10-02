@@ -162,6 +162,12 @@ function mergeSourcesByAlias(sources: any[]) {
   }));
 }
 
+/**
+ * Normalize the API model breakdown into provider-oriented fleet rows: one
+ * entry per source with totals, cache stats and its per-model ranking. Each
+ * model row carries the token-type splits (`tokens`) that feed the expandable
+ * detail rows in the All-models and per-provider lists.
+ */
 export function buildFleetData(modelBreakdown: any, { copyFn }: AnyRecord = {}) {
   const safeCopy = typeof copyFn === "function" ? copyFn : (key: string) => key;
   const sources: any[] = mergeSourcesByAlias(

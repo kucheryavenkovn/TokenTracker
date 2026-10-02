@@ -669,13 +669,5 @@
   "quota.pick_two": "最多關注兩個週期",
   "quota.reset_in": "{{time}}後重置",
   "quota.close": "關閉元件",
-  "quota.close_hint": "關閉元件；可從系統匣選單重新開啟",
-  "leaderboard.search.placeholder": "按名稱搜尋參與者…",
-  "leaderboard.search.label": "搜尋排行榜參與者",
-  "leaderboard.search.searching": "搜尋中…",
-  "leaderboard.search.no_results": "沒有與「{{q}}」相符的參與者",
-  "leaderboard.search.results_count": "找到 {{count}} 位",
-  "leaderboard.search.clear": "清除搜尋",
-  "leaderboard.search.result_aria": "檢視{{name}}（第 {{rank}} 名）",
-  "leaderboard.search.error": "搜尋失敗，請重試"
+  "quota.close_hint": "關閉元件；可從系統匣選單重新開啟"
 }
